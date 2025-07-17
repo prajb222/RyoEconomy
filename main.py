@@ -1,27 +1,38 @@
 
 import os
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import sqlite3
-import aiohttp
 import datetime
+from aiohttp import web
+from threading import Thread
 
+# --- Setup Discord Bot ---
 intents = discord.Intents.default()
 intents.messages = True
 intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="r!", intents=intents)
-TOKEN = os.environ["MTM5MDcyMzU4NjY4MzA0Nzk2Ng.GzFyUg.tLIkzrlJbbZkfnBsou2x_HbCXAstbLk0WMVpIk"]  # Replace this after downloading
+TOKEN = os.environ["TOKEN"]  # Set this environment variable in your hosting dashboard
 
+# --- Database Setup ---
 DATABASE = "ryo.db"
-VOTE_URL = "https://example.com"  # Edit this URL as needed
+VOTE_URL = "https://example.com"  # Replace with your actual Top.gg vote link
 
 conn = sqlite3.connect(DATABASE)
 c = conn.cursor()
-c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0, last_daily TEXT, last_vote TEXT)")
+c.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        balance INTEGER DEFAULT 0,
+        last_daily TEXT,
+        last_vote TEXT
+    )
+""")
 conn.commit()
 
+# --- Helper Functions ---
 def get_balance(user_id):
     c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
     row = c.fetchone()
@@ -43,6 +54,7 @@ def get_last_vote(user_id):
     row = c.fetchone()
     return datetime.datetime.fromisoformat(row[0]) if row and row[0] else None
 
+# --- Commands ---
 @bot.event
 async def on_ready():
     print(f"Bot is ready as {bot.user}")
@@ -64,10 +76,9 @@ async def ryovote(ctx):
         time_left = f"{remaining.seconds // 3600}h {(remaining.seconds // 60) % 60}m"
 
     embed = discord.Embed(
-        title="**Ryo Economy - Vote**",
-        description=f"[Claim a free Vote Pack which contains 2000 Ryo.]({VOTE_URL})
-
-[TopGG Vote: {time_left}]({VOTE_URL})",
+        title="Ryo Economy - Vote",
+        description=f"[Claim a free Vote Pack which contains 2000 Ryo.]({VOTE_URL})\n\n"
+                    f"[TopGG Vote: {time_left}]({VOTE_URL})",
         color=discord.Color.blue()
     )
     await ctx.send(embed=embed)
@@ -76,11 +87,14 @@ async def ryovote(ctx):
 async def on_message(message):
     await bot.process_commands(message)
 
-@bot.route("/vote", methods=["POST"])
-async def vote_webhook(request):
+# --- Webhook Handler for Top.gg Votes ---
+app = web.Application()
+
+async def handle_vote(request):
     data = await request.json()
-    user_id = int(data["user"])  # from top.gg webhook
+    user_id = int(data["user"])
     user = await bot.fetch_user(user_id)
+
     old_bal = get_balance(user_id)
     update_balance(user_id, 2000)
     new_bal = old_bal + 2000
@@ -88,19 +102,22 @@ async def vote_webhook(request):
 
     try:
         await user.send(
-            "**Thank You For Voting On Top.GG!**
-
-"
-            f"Purse:
-{old_bal} + 2000 Ryo
-"
+            "**Thank You For Voting On Top.GG!**\n\n"
+            f"Purse:\n{old_bal} + 2000 Ryo\n"
             f"Total: {new_bal}"
         )
     except:
         print(f"Couldn't DM {user}")
 
-    return "OK"
+    return web.Response(text="OK")
 
-# --- Optional: daily and other commands can be added below this ---
+app.router.add_post("/vote", handle_vote)
 
+# --- Run aiohttp Server in Background ---
+def run_web():
+    web.run_app(app, port=8080)
+
+Thread(target=run_web).start()
+
+# --- Run Bot ---
 bot.run(TOKEN)
